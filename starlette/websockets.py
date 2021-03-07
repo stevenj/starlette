@@ -5,6 +5,10 @@ import typing
 from starlette.requests import HTTPConnection
 from starlette.types import Message, Receive, Scope, Send
 
+import datetime
+
+def trace_it(message):
+    print(f"{datetime.datetime.now()} : Starlette Low Level Trace : {message}")
 
 class WebSocketState(enum.Enum):
     CONNECTING = 0
@@ -30,18 +34,26 @@ class WebSocket(HTTPConnection):
         """
         Receive ASGI websocket messages, ensuring valid state transitions.
         """
+        trace_it("Websocket receive started")
         if self.client_state == WebSocketState.CONNECTING:
+            trace_it("Websocket _receive started #1")
             message = await self._receive()
+            trace_it("Websocket _receive ended #1")
             message_type = message["type"]
             assert message_type == "websocket.connect"
             self.client_state = WebSocketState.CONNECTED
+            trace_it("Websocket receive ended - CONNECTING")
             return message
         elif self.client_state == WebSocketState.CONNECTED:
+            trace_it("Websocket _receive started #2")
             message = await self._receive()
+            trace_it("Websocket _receive ended #2")
             message_type = message["type"]
             assert message_type in {"websocket.receive", "websocket.disconnect"}
             if message_type == "websocket.disconnect":
+                trace_it("Websocket disconnected on RX")
                 self.client_state = WebSocketState.DISCONNECTED
+            trace_it("Websocket receive ended - CONNECTED")
             return message
         else:
             raise RuntimeError(
@@ -52,32 +64,32 @@ class WebSocket(HTTPConnection):
         """
         Send ASGI websocket messages, ensuring valid state transitions.
         """
-        print("Websocket send start")
+        trace_it("Websocket send start")
         if self.application_state == WebSocketState.CONNECTING:
-            print("Websocket send - connecting")
+            trace_it("Websocket send - connecting")
             message_type = message["type"]
             assert message_type in {"websocket.accept", "websocket.close"}
             if message_type == "websocket.close":
                 self.application_state = WebSocketState.DISCONNECTED
             else:
                 self.application_state = WebSocketState.CONNECTED
-            print("Websocket awaiting _send #1")
+            trace_it("Websocket awaiting _send #1")
             await self._send(message)
-            print("Websocket awaiting _send done #1")
+            trace_it("Websocket awaiting _send done #1")
         elif self.application_state == WebSocketState.CONNECTED:
-            print("Websocket send - connected")
+            trace_it("Websocket send - connected")
             message_type = message["type"]
             assert message_type in {"websocket.send", "websocket.close"}
             if message_type == "websocket.close":
-                print("Websocket now disconnected")
+                trace_it("Websocket now disconnected")
                 self.application_state = WebSocketState.DISCONNECTED
-            print("Websocket awaiting _send #2")
+            trace_it("Websocket awaiting _send #2")
             await self._send(message)
-            print("Websocket awaiting _send done #2")
+            trace_it("Websocket awaiting _send done #2")
         else:
-            print("Websocket send - error")
+            trace_it("Websocket send - error")
             raise RuntimeError('Cannot call "send" once a close message has been sent.')
-        print("Websocket send end")
+        trace_it("Websocket send end")
 
     async def accept(self, subprotocol: str = None) -> None:
         if self.client_state == WebSocketState.CONNECTING:
@@ -87,6 +99,7 @@ class WebSocket(HTTPConnection):
 
     def _raise_on_disconnect(self, message: Message) -> None:
         if message["type"] == "websocket.disconnect":
+            trace_it("Websocket _raise_on_disconnect TRUE")
             raise WebSocketDisconnect(message["code"])
 
     async def receive_text(self) -> str:
@@ -102,15 +115,19 @@ class WebSocket(HTTPConnection):
         return message["bytes"]
 
     async def receive_json(self, mode: str = "text") -> typing.Any:
+        trace_it("Websocket receive_json")
         assert mode in ["text", "binary"]
         assert self.application_state == WebSocketState.CONNECTED
+        trace_it("Websocket receive_json - waiting for message")
         message = await self.receive()
+        trace_it("Websocket receive_json - waiting for message ended")
         self._raise_on_disconnect(message)
 
         if mode == "text":
             text = message["text"]
         else:
             text = message["bytes"].decode("utf-8")
+        trace_it("Websocket receive_json - ended")
         return json.loads(text)
 
     async def iter_text(self) -> typing.AsyncIterator[str]:
@@ -149,9 +166,9 @@ class WebSocket(HTTPConnection):
             await self.send({"type": "websocket.send", "bytes": text.encode("utf-8")})
 
     async def close(self, code: int = 1000) -> None:
-        print("Websocket Close start.")
+        trace_it("Websocket Close start.")
         await self.send({"type": "websocket.close", "code": code})
-        print("Websocket Close end.")
+        trace_it("Websocket Close end.")
 
 
 class WebSocketClose:
@@ -159,6 +176,6 @@ class WebSocketClose:
         self.code = code
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        print("WebSocketClose _call_")
+        trace_it("WebSocketClose _call_")
         await send({"type": "websocket.close", "code": self.code})
-        print("WebSocketClose _call_ ended")
+        trace_it("WebSocketClose _call_ ended")
